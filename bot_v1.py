@@ -10,7 +10,7 @@ import psutil
 import numpy as np
 from datetime import datetime
 from TTS.api import TTS
-from dotenv import load_dotenv
+from dotenv import  load_dotenv
 
 load_dotenv()
 
@@ -18,7 +18,6 @@ load_dotenv()
 ACCESS_KEY = os.getenv("ACCESS_KEY")
 if not ACCESS_KEY:
     raise ValueError("ACCESS_KEY not found in the env file.")
-
 WAKE_WORD = ["sarvis"]
 
 # ------------------- Init Model -------------------
@@ -58,27 +57,63 @@ def listen_command():
     print("You said: ", command)
     return command
 
-# ------------------- Command Execute -------------------
-def execute(command):
 
-    if "open edge" in command:
-        os.system("start msedge")
-        speak("Opening edge")
-    elif "open code" in command or "open vs code" in command:
-        os.system("code")
-        speak("Opening Visual Studio Code")
-    elif "time" in command:
+# ------------------- Intent Parser -------------------
+def parse_command(command):
+    command = command.lower()
+
+    # Open app intent
+    open_keywords = ["open", "launch", "start", "run"]
+    apps = {
+        "edge": "msedge",
+        "microsoft edge": "msedge",
+        "code": "code",
+        "vs code": "code",
+        "visual studio": "code"
+    }
+
+    for word in open_keywords:
+        if word in command:
+            for app_name in apps:
+                if app_name in command:
+                    return {
+                        "intent": "open_app",
+                        "app": apps[app_name]
+                    }
+
+    # Time intent
+    if "time" in command:
+        return {"intent": "get_time"}
+
+    # cpu intent
+    if "cpu" in command or "usage" in command:
+        return {"intent": "get_cpu"}
+
+    # shutdown intent
+    if "shutdown" in command or "turn off" in command:
+        return {"intent": "shutdown"}
+
+    return {"intent": "unknown"}
+
+# ------------------- Command Execute -------------------
+def execute(parsed):
+    intent = parsed["intent"]
+
+    if intent == "open_app":
+        app = parsed["app"]
+        os.system(f"start {app}")
+        speak(f"Opening {app}")
+    elif intent == "get_time":
         time_now = datetime.now().strftime("%H:%M")
         speak(f"The time is {time_now}")
-    elif "cpu usage" in command:
+    elif intent == "get_cpu":
         cpu = psutil.cpu_percent()
-        speak(f"The cpu usage is currently {cpu}")
-    elif "shutdown" in command:
+        speak(f"The cpu usage is currently {cpu} percent")
+    elif intent == "shutdown":
         speak("Shutting down the system")
         os.system("shutdown /s /t 1")
     else:
-        speak("I don't understand yet.")
-
+        speak("I didn't understand the command.")
 # ------------------- Wake Word loop -------------------
 print("Loading wake word engine...")
 
@@ -111,7 +146,8 @@ try:
             print("Wake word detected!")
             speak("Yes?")
             command = listen_command()
-            execute(command)
+            parsed = parse_command(command)
+            execute(parsed)
 except KeyboardInterrupt:
     print("Stopping assistant...")
 finally:
