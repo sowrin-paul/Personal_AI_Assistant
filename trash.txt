@@ -1,0 +1,68 @@
+
+        # result = subprocess.run(
+        #     ["ollama", "run", "llama3:8b", prompt],
+        #     capture_output=True,
+        #     text=True,
+        #     shell=True,
+        #     timeout=30,
+        #     encoding='utf-8',
+        #     errors='replace'
+        # )
+
+        # if result.returncode != 0:
+        #     print(f"Ollama error: {result.stderr}")
+        #     return {"intent": "unknown"}
+        #
+        # # Parse the JSON response
+        # response_text = result.stdout.strip()
+        #
+        # if not response_text:
+        #     print("Empty response from Ollama")
+        #     return {"intent": "unknown"}
+        #
+        # print(f"LLM raw response: {response_text[:200]}")
+        #
+        # # Extract JSON from response
+        # start = response_text.find('{')
+        # end = response_text.rfind('}') + 1
+        #
+        # if start >= 0 and end > start:
+        #     json_text = response_text[start:end]
+        #     json_text = json_text.replace('```json', '').replace('```', '').strip()
+        #
+        #     # Validation layer
+        #     try:
+        #         parsed = json.loads(json_text)
+        #
+        #         valid_intents = ["open_app", "get_time", "get_cpu", "shutdown", "unknown"]
+        #
+        #         if "intent" not in parsed:
+        #             return {"intent": "unknown"}
+        #
+        #         if parsed["intent"] not in valid_intents:
+        #             return {"intent": "unknown"}
+        #
+        #         # Validate app if open_app
+        #         if parsed["intent"] == "open_app":
+        #             if "app" not in parsed:
+        #                 return {"intent": "unknown"}
+        #
+        #             allowed_apps = ["msedge", "code", "notepad", "calc", "firefox"]
+        #
+        #             if parsed["app"] not in allowed_apps:
+        #                 return {"intent": "unknown"}
+        #
+        #         return parsed
+        #
+        #     except json.JSONDecodeError:
+        #         return {"intent": "unknown"}
+        #
+        # print("No JSON object found in response")
+        # return {"intent": "unknown"}
+
+    # except subprocess.TimeoutExpired:
+    #     print("Ollama request timed out")
+    #     return {"intent": "unknown"}
+    # except Exception as e:
+    #     print(f"Error calling Ollama: {e}")
+    #     return {"intent": "unknown"}

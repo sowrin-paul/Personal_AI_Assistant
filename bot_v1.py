@@ -1,6 +1,8 @@
+import time
 import pvporcupine
 import pyaudio
 import struct
+import requests
 import sounddevice as sd
 import whisper
 import scipy.io.wavfile as wav
@@ -8,9 +10,24 @@ import torch
 import os
 import psutil
 import numpy as np
+import json
+
 from datetime import datetime
 from TTS.api import TTS
-from dotenv import  load_dotenv
+from dotenv import load_dotenv
+from rapidfuzz import process
+
+apps = {
+    "microsoft edge": "msedge",
+    "edge": "msedge",
+    "visual studio code": "code",
+    "vs code": "code",
+    "code": "code",
+    "notepad": "notepad",
+    "calculator": "calc",
+    "firefox": "firefox",
+    "mozilla": "firefox"
+}
 
 load_dotenv()
 
@@ -28,15 +45,28 @@ print("Loading tts model...")
 device = "cuda" if torch.cuda.is_available() else "cpu"
 tts = TTS("tts_models/en/vctk/vits").to(device)
 
+# ------------------- Model warmup -------------------
+print("Warming up model...")
+
+dummy_audio = np.zeros(16000, dtype=np.float32)
+whisper_model.transcribe(dummy_audio)
+
+tts.tts_to_file(text="System ready.", speaker="p226", file_path="warmup.wav")
+
+print("Warmup complete.")
+
+
 # ------------------- TTs function -------------------
 def speak(text):
     print("Assistant: ", text)
     tts.tts_to_file(text=text, speaker="p226", file_path="response.wav")
     os.system("start response.wav")
 
+
 # ------------------- Whisper Listen commands -------------------
 def listen_command():
     print("Listening for command...")
+    time.sleep(0.8)
 
     duration = 4
     fs = 16000
@@ -48,8 +78,9 @@ def listen_command():
 
     fs, audio_data = wav.read("input.wav")
 
-    audio_data = audio_data.astype(np.float32).flatten()
-    audio_data = audio_data / np.max(np.abs(audio_data))
+    max_val = np.max(np.abs(audio_data))
+    if max_val > 0:
+        audio_data = audio_data / max_val
 
     result = whisper_model.transcribe(audio_data)
     command = result["text"].lower()
@@ -58,28 +89,98 @@ def listen_command():
     return command
 
 
+# ------------------- LLM parser -------------------
+def llm_parse(command):
+    if len(command.strip()) < 4:
+        return {"intent": "unknown"}
+
+    prompt = f"""You are a strict JSON command parser for a PC voice assistant.
+    
+    You MUST respond with ONLY ONE JSON object.
+    No explanations.
+    No markdown.
+    No code blocks.
+    No extra keys.
+    No text before or after JSON.
+    
+    Return EXACTLY one of these formats:
+    
+    1) {{"intent": "open_app", "app": "<app_name>"}}
+    2) {{"intent": "get_time"}}
+    3) {{"intent": "get_cpu"}}
+    4) {{"intent": "shutdown"}}
+    5) {{"intent": "unknown"}}
+    
+    If the command contains an app name that is NOT in the available apps list,
+    Do NOT guess.
+    Do NOT substitute.
+    Do NOT infer.
+    
+    Available apps:
+    - msedge
+    - code
+    - notepad
+    - calc
+    - firefox
+    
+    If the requested app is not in the list, return:
+    {{"intent": "unknown"}}
+    
+    Command: "{command}"
+    
+    Return ONLY the JSON:
+    """
+
+    try:
+        response = requests.post(
+            "http://localhost:11434/api/generate",
+            json={
+                "model": "llama3:8b",
+                "prompt": prompt,
+                "stream": False,
+                "options": {
+                    "temperature": 0
+                }
+            }
+        )
+
+        result = response.json()["response"].strip()
+
+        print("LLM raw response:", result)
+
+        parsed = json.loads(result)
+
+        return parsed
+    except Exception as e:
+        print("LLM parsing failed:", e)
+        return {"intent": "unknown"}
+
+# ------------------- Misheard words -------------------
+def fuzzy_match_app(command):
+    choices = list(apps.keys())
+    match, score, _ = process.extractOne(command, choices)
+
+    if score >= 70:
+        return apps[match]
+    return None
+
+# ------------------- Multi-command parsing -------------------
+def split_command(command):
+    separators = [" and ", " then ", ","]
+    for sep in separators:
+        if sep in command:
+            return command.split(sep)
+    return [command]
+
 # ------------------- Intent Parser -------------------
 def parse_command(command):
     command = command.lower()
 
     # Open app intent
-    open_keywords = ["open", "launch", "start", "run"]
-    apps = {
-        "edge": "msedge",
-        "microsoft edge": "msedge",
-        "code": "code",
-        "vs code": "code",
-        "visual studio": "code"
-    }
-
-    for word in open_keywords:
-        if word in command:
-            for app_name in apps:
-                if app_name in command:
-                    return {
-                        "intent": "open_app",
-                        "app": apps[app_name]
-                    }
+    if any(word in command for word in ["open", "start", "launch", "run"]):
+        app = fuzzy_match_app(command)
+        if app:
+            return {"intent": "open_app"}
 
     # Time intent
     if "time" in command:
@@ -95,6 +196,15 @@ def parse_command(command):
 
     return {"intent": "unknown"}
 
+# ------------------- Safety check after parse -------------------
+def safe_validate(parsed, original_command):
+    if parsed["intent"] == "open_app":
+        app = parsed.get("app")
+
+        if app not in original_command:
+            return {"intent": "unknown"}
+    return parsed
+
 # ------------------- Command Execute -------------------
 def execute(parsed):
     intent = parsed["intent"]
@@ -102,7 +212,9 @@ def execute(parsed):
     if intent == "open_app":
         app = parsed["app"]
         os.system(f"start {app}")
-        speak(f"Opening {app}")
+        reverse_app = {v: k for k, v in apps.items()}
+        spoken_name = reverse_app.get(app, app)
+        speak(f"Opening {spoken_name}")
     elif intent == "get_time":
         time_now = datetime.now().strftime("%H:%M")
         speak(f"The time is {time_now}")
@@ -114,6 +226,8 @@ def execute(parsed):
         os.system("shutdown /s /t 1")
     else:
         speak("I didn't understand the command.")
+
+
 # ------------------- Wake Word loop -------------------
 print("Loading wake word engine...")
 
@@ -146,8 +260,21 @@ try:
             print("Wake word detected!")
             speak("Yes?")
             command = listen_command()
-            parsed = parse_command(command)
-            execute(parsed)
+
+            if len(command.strip()) < 3 or command.strip() in ["yes", "yes.", "no", "okay", "ok"]:
+                speak("Please say a command.")
+                continue
+
+            commands = split_command(command)
+
+            for cmd in commands:
+                parsed = parse_command(cmd.strip())
+
+                if parsed["intent"] == "unknown":
+                    parsed = llm_parse(cmd.strip())
+                    parsed = safe_validate(parsed, cmd.strip())
+
+                execute(parsed)
 except KeyboardInterrupt:
     print("Stopping assistant...")
 finally:
